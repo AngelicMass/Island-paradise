@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Island Paradise - Complete Animal Crossing Game</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Trebuchet MS', sans-serif; overflow: hidden; }
+    .water-shimmer { background: linear-gradient(45deg, #4facfe 0%, #00f2fe 50%, #4facfe 100%); 
+                     background-size: 400% 400%; animation: shimmer 3s ease infinite; }
+    @keyframes shimmer { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+    @keyframes walk { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-5px); } }
+    .walking { animation: walk 0.4s infinite; }
+    .tile { transition: all 0.1s; }
+    .tile:hover { opacity: 0.8; transform: scale(1.05); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const Game = () => {
+      // Core State
+      const [phase, setPhase] = useState('intro'); // intro, naming, customize, playing
+      const [name, setName] = useState('');
+      const [islandName, setIslandName] = useState('');
+      
+      // Player
+      const [player, setPlayer] = useState({
+        x: 20, y: 20, dir: 'down', moving: false,
+        skin: '#FFDBAC', hair: '#8B4513', hairStyle: 'short',
+        topColor: '#FF6B6B', bottomColor: '#4ECDC4'
+      });
+      
+      // Game Stats
+      const [bells, setBells] = useState(10000);
+      const [time, setTime] = useState(8);
+      const [day, setDay] = useState(1);
+      const [season, setSeason] = useState('spring');
+      
+      // Tools & Modes
+      const [tool, setTool] = useState(null);
+      const [terraformMode, setTerraformMode] = useState(null);
+      const [hasIslandDesigner, setHasIslandDesigner] = useState(false);
+      
+      // UI
+      const [view, setView] = useState('island');
+      const [menu, setMenu] = useState(null);
+      const [notif, setNotif] = useState(null);
+      
+      // World
+      const SIZE = 30;
+      const [terrain, setTerrain] = useState(() => {
+        const t = [];
+        for (let y = 0; y < SIZE; y++) {
+          t[y] = [];
+          for (let x = 0; x < SIZE; x++) {
+            let type = 'grass', level = 0;
+            if (x < 2 || x > SIZE-3 || y < 2 || y > SIZE-3) { type = 'water'; level = -1; }
+            else if (x === 2 || x === SIZE-3 || y === 2 || y === SIZE-3) type = 'sand';
+            t[y][x] = { type, level, path: null };
+          }
+        }
+        return t;
+      });
+      
+      const [villagers] = useState([
+        { id: 1, name: 'Maple', x: 10, y: 10, emoji: '🐻', phrase: 'honey' },
+        { id: 2, name: 'Raymond', x: 20, y: 15, emoji: '🐱', phrase: 'crisp' },
+        { id: 3, name: 'Audie', x: 15, y: 20, emoji: '🐺', phrase: 'foxtail' }
+      ]);
+      
+      const [inventory, setInventory] = useState({
+        bugs: [], fish: [], materials: [], clothing: [], furniture: [], designs: []
+      });
+      
+      const [museum, setMuseum] = useState({ bugs: [], fish: [] });
+      
+      // Design Canvas
+      const [designCanvas, setDesignCanvas] = useState(() => 
+        Array(16).fill().map(() => Array(16).fill('#FFF'))
+      );
+      const [designColor, setDesignColor] = useState('#000');
+      const [designName, setDesignName] = useState('');
+      
+      // Controls
+      const keys = useRef(new Set());
+      
+      useEffect(() => {
+        const down = (e) => {
+          keys.current.add(e.key.toLowerCase());
+          if (e.key === 'x' || e.key === 'X') setMenu(menu ? null : 'main');
+          if (e.key === 'e' || e.key === ' ') interact();
+          if (e.key === '1') setTool('net');
+          if (e.key === '2') setTool('rod');
+          if (e.key === '3') setTool('shovel');
+        };
+        const up = (e) => keys.current.delete(e.key.toLowerCase());
+        window.addEventListener('keydown', down);
+        window.addEventListener('keyup', up);
+        return () => {
+          window.removeEventListener('keydown', down);
+          window.removeEventListener('keyup', up);
+        };
+      }, [menu, tool, terraformMode]);
+      
+      // Movement
+      useEffect(() => {
+        if (view !== 'island' || menu) return;
+        const interval = setInterval(() => {
+          let { x, y, dir } = player;
+          let moving = false;
+          
+          if (keys.current.has('w') || keys.current.has('arrowup')) { y--; dir = 'up'; moving = true; }
+          if (keys.current.has('s') || keys.current.has('arrowdown')) { y++; dir = 'down'; moving = true; }
+          if (keys.current.has('a') || keys.current.has('arrowleft')) { x--; dir = 'left'; moving = true; }
+          if (keys.current.has('d') || keys.current.has('arrowright')) { x++; dir = 'right'; moving = true; }
+          
+          x = Math.max(2, Math.min(SIZE-3, x));
+          y = Math.max(2, Math.min(SIZE-3, y));
+          
+          if (terrain[y]?.[x]?.type !== 'water') {
+            setPlayer(p => ({ ...p, x, y, dir, moving }));
+          }
+        }, 100);
+        return () => clearInterval(interval);
+      }, [view, menu, terrain]);
+      
+      // Time
+      useEffect(() => {
+        const timer = setInterval(() => {
+          setTime(t => {
+            const newT = (t + 1) % 24;
+            if (newT === 0) setDay(d => d + 1);
+            return newT;
+          });
+        }, 30000);
+        return () => clearInterval(timer);
+      }, []);
+      
+      // Interactions
+      const interact = () => {
+        if (view !== 'island') return;
+        
+        villagers.forEach(v => {
+          if (Math.abs(v.x - player.x) <= 1 && Math.abs(v.y - player.y) <= 1) {
+            notify(`${v.name}: "Hey ${name}, ${v.phrase}!"`);
+          }
+        });
+        
+        if (tool === 'net') catchBug();
+        if (tool === 'rod') catchFish();
+        if (terraformMode) terraform();
+      };
+      
+      const catchBug = () => {
+        const bugs = [
+          { name: 'Butterfly', value: 160, emoji: '🦋' },
+          { name: 'Ladybug', value: 200, emoji: '🐞' },
+          { name: 'Beetle', value: 800, emoji: '🪲' }
+        ];
+        const bug = bugs[Math.floor(Math.random() * bugs.length)];
+        setInventory(inv => ({ ...inv, bugs: [...inv.bugs, { ...bug, id: Date.now() }] }));
+        notify(`${bug.emoji} Caught a ${bug.name}!`);
+      };
+      
+      const catchFish = () => {
+        const fishes = [
+          { name: 'Sea Bass', value: 400, emoji: '🐟' },
+          { name: 'Carp', value: 300, emoji: '🐠' },
+          { name: 'Koi', value: 4000, emoji: '🐡' }
+        ];
+        const fish = fishes[Math.floor(Math.random() * fishes.length)];
+        setInventory(inv => ({ ...inv, fish: [...inv.fish, { ...fish, id: Date.now() }] }));
+        notify(`${fish.emoji} Caught a ${fish.name}!`);
+      };
+      
+      const terraform = () => {
+        if (!hasIslandDesigner) {
+          notify('Need Island Designer!');
+          return;
+        }
+        
+        const { x, y } = player;
+        setTerrain(t => {
+          const newT = [...t];
+          newT[y] = [...newT[y]];
+          const tile = newT[y][x];
+          
+          if (terraformMode === 'cliff' && tile.level < 2) {
+            newT[y][x] = { ...tile, level: tile.level + 1, type: 'cliff' };
+          } else if (terraformMode === 'water' && tile.level === 0) {
+            newT[y][x] = { type: 'water', level: -1, path: null };
+          } else if (terraformMode === 'path') {
+            newT[y][x] = { ...tile, path: 'stone' };
+          } else if (terraformMode === 'remove') {
+            if (tile.path) newT[y][x] = { ...tile, path: null };
+            else if (tile.level > 0) newT[y][x] = { ...tile, level: tile.level - 1 };
+            else if (tile.type === 'water') newT[y][x] = { type: 'grass', level: 0, path: null };
+          }
+          
+          return newT;
+        });
+      };
+      
+      const notify = (msg) => {
+        setNotif(msg);
+        setTimeout(() => setNotif(null), 3000);
+      };
+      
+      const getTileColor = (tile) => {
+        if (tile.path) return '#808080';
+        if (tile.type === 'water') return '#4facfe';
+        if (tile.type === 'sand') return '#F4E2D8';
+        if (tile.level === 0) return '#92FE9D';
+        if (tile.level === 1) return '#8B7355';
+        return '#6B5847';
+      };
+      
+      // Character Sprite
+      const CharSprite = () => (
+        <div style={{ width: 20, height: 30, position: 'relative' }}>
+          <div style={{ position: 'absolute', top: 0, left: 5, width: 10, height: 10, borderRadius: '50%', background: player.skin }} />
+          <div style={{ position: 'absolute', top: -2, left: 6, width: 8, height: 6, borderRadius: '5px 5px 0 0', background: player.hair }} />
+          <div style={{ position: 'absolute', top: 10, left: 6, width: 8, height: 12, background: `linear-gradient(${player.topColor} 50%, ${player.bottomColor} 50%)` }} />
+        </div>
+      );
+      
+      // Clothing Store
+      const clothing = [
+        { name: 'Red Shirt', type: 'top', color: '#E74C3C', price: 800 },
+        { name: 'Blue Jeans', type: 'bottom', color: '#3498DB', price: 1000 },
+        { name: 'Green Dress', type: 'dress', color: '#2ECC71', price: 1500 },
+        { name: 'Yellow Sweater', type: 'top', color: '#F1C40F', price: 1200 }
+      ];
+      
+      const buyClothing = (item) => {
+        if (bells < item.price) return notify('Not enough Bells!');
+        setBells(b => b - item.price);
+        setInventory(inv => ({ ...inv, clothing: [...inv.clothing, { ...item, id: Date.now() }] }));
+        notify(`Bought ${item.name}!`);
+      };
+      
+      const wearClothing = (item) => {
+        if (item.type === 'top') setPlayer(p => ({ ...p, topColor: item.color }));
+        if (item.type === 'bottom') setPlayer(p => ({ ...p, bottomColor: item.color }));
+        if (item.type === 'dress') setPlayer(p => ({ ...p, topColor: item.color, bottomColor: item.color }));
+        notify(`Wearing ${item.name}!`);
+      };
+      
+      // Custom Design
+      const paintPixel = (y, x) => {
+        setDesignCanvas(c => {
+          const newC = [...c];
+          newC[y] = [...newC[y]];
+          newC[y][x] = designColor;
+          return newC;
+        });
+      };
+      
+      const saveDesign = () => {
+        if (!designName) return notify('Name your design!');
+        setInventory(inv => ({
+          ...inv,
+          designs: [...inv.designs, { name: designName, canvas: designCanvas, id: Date.now() }]
+        }));
+        notify(`Saved "${designName}"!`);
+        setDesignName('');
+        setDesignCanvas(Array(16).fill().map(() => Array(16).fill('#FFF')));
+      };
+      
+      // Intro
+      if (phase === 'intro') {
+        return (
+          <div className="w-screen h-screen bg-gradient-to-b from-sky-400 to-green-400 flex items-center justify-center">
+            <div className="bg-white rounded-3xl p-12 max-w-2xl text-center shadow-2xl">
+              <h1 className="text-6xl font-bold text-green-700 mb-6">🏝️ Island Paradise</h1>
+              <p className="text-xl mb-8">Your complete Animal Crossing adventure awaits!</p>
+              <button onClick={() => setPhase('naming')} className="bg-green-600 text-white px-12 py-4 rounded-full text-2xl hover:bg-green-700">
+                Start! ✨
+              </button>
+            </div>
+          </div>
+        );
+      }
+      
+      // Naming
+      if (phase === 'naming') {
+        return (
+          <div className="w-screen h-screen bg-gradient-to-b from-sky-400 to-green-400 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-10 max-w-lg w-full">
+              <h2 className="text-3xl font-bold mb-6 text-center">Welcome!</h2>
+              <div className="mb-4">
+                <label className="block font-bold mb-2">Your Name:</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} className="w-full px-4 py-3 border-2 rounded-lg" />
+              </div>
+              <div className="mb-6">
+                <label className="block font-bold mb-2">Island Name:</label>
+                <input value={islandName} onChange={(e) => setIslandName(e.target.value)} className="w-full px-4 py-3 border-2 rounded-lg" />
+              </div>
+              <button onClick={() => name && islandName && setPhase('customize')} className="w-full bg-green-600 text-white py-3 rounded-lg text-xl">
+                Continue →
+              </button>
+            </div>
+          </div>
+        );
+      }
+      
+      // Customization
+      if (phase === 'customize') {
+        return (
+          <div className="w-screen h-screen bg-gradient-to-b from-sky-400 to-green-400 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl p-8 max-w-4xl w-full my-8">
+              <h2 className="text-3xl font-bold mb-6 text-center">Customize Character</h2>
+              <div className="grid md:grid-cols-2 gap-8">
+                <div className="flex justify-center items-center bg-green-100 rounded-lg p-8">
+                  <div style={{ transform: 'scale(4)' }}><CharSprite /></div>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block font-bold mb-2">Skin Tone</label>
+                    <div className="flex gap-2">
+                      {['#FFDBAC', '#F1C27D', '#E0AC69', '#8D5524'].map(c => (
+                        <button key={c} onClick={() => setPlayer(p => ({ ...p, skin: c }))} 
+                                className="w-12 h-12 rounded-full border-4" style={{ background: c, borderColor: player.skin === c ? '#000' : '#CCC' }} />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-2">Hair Color</label>
+                    <div className="flex gap-2">
+                      {['#000', '#8B4513', '#FFD700', '#FF6347'].map(c => (
+                        <button key={c} onClick={() => setPlayer(p => ({ ...p, hair: c }))} 
+                                className="w-12 h-12 rounded-full border-4" style={{ background: c, borderColor: player.hair === c ? '#000' : '#CCC' }} />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-2">Top Color</label>
+                    <div className="flex gap-2">
+                      {['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'].map(c => (
+                        <button key={c} onClick={() => setPlayer(p => ({ ...p, topColor: c }))} 
+                                className="w-12 h-12 rounded-full border-4" style={{ background: c, borderColor: player.topColor === c ? '#000' : '#CCC' }} />
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-2">Bottom Color</label>
+                    <div className="flex gap-2">
+                      {['#4682B4', '#2C3E50', '#8B4513', '#556B2F'].map(c => (
+                        <button key={c} onClick={() => setPlayer(p => ({ ...p, bottomColor: c }))} 
+                                className="w-12 h-12 rounded-full border-4" style={{ background: c, borderColor: player.bottomColor === c ? '#000' : '#CCC' }} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => { setPhase('playing'); notify(`Welcome to ${islandName}!`); }} 
+                      className="w-full mt-6 bg-green-600 text-white py-3 rounded-lg text-xl">
+                Start Game! 🎮
+              </button>
+            </div>
+          </div>
+        );
+      }
+      
+      // Main Game
+      return (
+        <div className="w-screen h-screen bg-black flex flex-col items-center justify-center">
+          <div style={{ width: 800, height: 600, position: 'relative' }}>
+            {/* HUD */}
+            <div className="absolute top-0 left-0 right-0 bg-black/80 text-white p-3 flex justify-between z-50">
+              <div><strong>{name}</strong> • {islandName}</div>
+              <div>{time}:00 {time >= 6 && time < 18 ? '☀️' : '🌙'} • {season}</div>
+              <div>💰 {bells.toLocaleString()}</div>
+            </div>
+            
+            {/* Island View */}
+            {view === 'island' && (
+              <div className="w-full h-full overflow-hidden bg-sky-400">
+                <div style={{ width: SIZE * 20, height: SIZE * 20, position: 'relative' }}>
+                  {/* Terrain */}
+                  {terrain.map((row, y) => (
+                    <div key={y} className="flex" style={{ height: 20 }}>
+                      {row.map((tile, x) => (
+                        <div key={x} className={tile.type === 'water' ? 'water-shimmer tile' : 'tile'}
+                             style={{ width: 20, height: 20, background: getTileColor(tile), border: '0.5px solid rgba(0,0,0,0.1)' }} />
+                      ))}
+                    </div>
+                  ))}
+                  
+                  {/* Villagers */}
+                  {villagers.map(v => (
+                    <div key={v.id} style={{ position: 'absolute', left: v.x * 20 - 10, top: v.y * 20 - 15, fontSize: 20 }}>
+                      {v.emoji}
+                    </div>
+                  ))}
+                  
+                  {/* Player */}
+                  <div className={player.moving ? 'walking' : ''} 
+                       style={{ position: 'absolute', left: player.x * 20 - 10, top: player.y * 20 - 15, zIndex: 100 }}>
+                    <CharSprite />
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Tool Indicator */}
+            {tool && (
+              <div className="absolute bottom-20 right-4 bg-black/80 text-white px-4 py-2 rounded-lg">
+                Tool: {tool === 'net' ? '🦋 Net' : tool === 'rod' ? '🎣 Rod' : '🔨 Shovel'}
+              </div>
+            )}
+            
+            {/* Terraform Mode */}
+            {terraformMode && (
+              <div className="absolute bottom-20 left-4 bg-black/80 text-white px-4 py-2 rounded-lg">
+                Mode: {terraformMode === 'cliff' ? '⛰️ Cliff' : terraformMode === 'water' ? '💧 Water' : 
+                       terraformMode === 'path' ? '🛤️ Path' : '❌ Remove'}
+              </div>
+            )}
+            
+            {/* Controls */}
+            <div className="absolute bottom-4 left-4 bg-black/80 text-white text-xs px-3 py-2 rounded-lg">
+              <div><strong>Controls:</strong></div>
+              <div>WASD - Move | E - Interact | X - Menu | 1-3 - Tools</div>
+            </div>
+            
+            {/* Notification */}
+            {notif && (
+              <div className="absolute top-20 left-1/2 transform -translate-x-1/2 bg-black/90 text-white px-6 py-3 rounded-lg text-center">
+                {notif}
+              </div>
+            )}
+            
+            {/* Menu */}
+            {menu && (
+              <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-50">
+                <div className="bg-white rounded-2xl p-6 w-11/12 max-w-4xl max-h-5/6 overflow-y-auto">
+                  <div className="flex justify-between mb-4">
+                    <h2 className="text-2xl font-bold">Menu</h2>
+                    <button onClick={() => setMenu(null)} className="bg-red-500 text-white px-4 py-2 rounded">Close ✕</button>
+                  </div>
+                  
+                  <div className="flex gap-2 mb-4">
+                    {['inventory', 'shop', 'designer', 'terraform'].map(m => (
+                      <button key={m} onClick={() => setMenu(m)} 
+                              className={`px-4 py-2 rounded ${menu === m ? 'bg-green-600 text-white' : 'bg-gray-200'}`}>
+                        {m.charAt(0).toUpperCase() + m.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  {/* Inventory */}
+                  {menu === 'inventory' && (
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="text-xl font-bold mb-2">🦋 Bugs ({inventory.bugs.length})</h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {inventory.bugs.map(bug => (
+                            <div key={bug.id} className="border-2 p-2 rounded bg-green-50">
+                              <div className="text-2xl">{bug.emoji}</div>
+                              <div className="font-bold text-sm">{bug.name}</div>
+                              <div className="text-xs">{bug.value} Bells</div>
+                              <button onClick={() => { setBells(b => b + bug.value); setInventory(inv => ({ ...inv, bugs: inv.bugs.filter(b => b.id !== bug.id) })); notify('Sold!'); }} 
+                                      className="w-full mt-1 bg-yellow-500 text-white text-xs py-1 rounded">Sell</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <h3 className="text-xl font-bold mb-2">🐟 Fish ({inventory.fish.length})</h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {inventory.fish.map(fish => (
+                            <div key={fish.id} className="border-2 p-2 rounded bg-blue-50">
+                              <div className="text-2xl">{fish.emoji}</div>
+                              <div className="font-bold text-sm">{fish.name}</div>
+                              <div className="text-xs">{fish.value} Bells</div>
+                              <button onClick={() => { setBells(b => b + fish.value); setInventory(inv => ({ ...inv, fish: inv.fish.filter(f => f.id !== fish.id) })); notify('Sold!'); }} 
+                                      className="w-full mt-1 bg-yellow-500 text-white text-xs py-1 rounded">Sell</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <h3 className="text-xl font-bold mb-2">👕 Clothing ({inventory.clothing.length})</h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {inventory.clothing.map(item => (
+                            <div key={item.id} className="border-2 p-2 rounded">
+                              <div className="font-bold text-sm">{item.name}</div>
+                              <div className="w-full h-8 rounded" style={{ background: item.color }} />
+                              <button onClick={() => wearClothing(item)} className="w-full mt-1 bg-blue-500 text-white text-xs py-1 rounded">Wear</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Shop */}
+                  {menu === 'shop' && (
+                    <div>
+                      <h3 className="text-xl font-bold mb-4">🛍️ Able Sisters - Clothing Shop</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        {clothing.map((item, i) => (
+                          <div key={i} className="border-2 p-4 rounded">
+                            <div className="font-bold text-lg">{item.name}</div>
+                            <div className="w-full h-16 rounded my-2" style={{ background: item.color }} />
+                            <div className="text-sm mb-2">💰 {item.price} Bells</div>
+                            <button onClick={() => buyClothing(item)} className="w-full bg-green-600 text-white py-2 rounded">Buy</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Designer */}
+                  {menu === 'designer' && (
+                    <div>
+                      <h3 className="text-xl font-bold mb-4">🎨 Custom Design Pro</h3>
+                      <div className="flex gap-4">
+                        <div>
+                          <div className="border-4 border-gray-400 inline-block">
+                            {designCanvas.map((row, y) => (
+                              <div key={y} className="flex">
+                                {row.map((color, x) => (
+                                  <div key={x} onClick={() => paintPixel(y, x)} 
+                                       style={{ width: 16, height: 16, background: color, cursor: 'pointer', border: '0.5px solid #ccc' }} />
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          <div className="mb-4">
+                            <label className="block font-bold mb-2">Color:</label>
+                            <input type="color" value={designColor} onChange={(e) => setDesignColor(e.target.value)} className="w-full h-12" />
+                            <div className="flex gap-2 mt-2">
+                              {['#000', '#FFF', '#F00', '#0F0', '#00F', '#FF0', '#F0F', '#0FF'].map(c => (
+                                <button key={c} onClick={() => setDesignColor(c)} className="w-8 h-8 border-2" style={{ background: c }} />
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mb-4">
+                            <label className="block font-bold mb-2">Name:</label>
+                            <input value={designName} onChange={(e) => setDesignName(e.target.value)} className="w-full px-3 py-2 border-2 rounded" />
+                          </div>
+                          <button onClick={saveDesign} className="w-full bg-green-600 text-white py-3 rounded text-lg">Save Design</button>
+                          
+                          <div className="mt-6">
+                            <h4 className="font-bold mb-2">Saved Designs:</h4>
+                            <div className="space-y-2">
+                              {inventory.designs.map(d => (
+                                <div key={d.id} className="border-2 p-2 rounded flex items-center gap-2">
+                                  <div className="w-12 h-12 border-2" style={{ 
+                                    background: `url(${(() => {
+                                      const canvas = document.createElement('canvas');
+                                      canvas.width = 16;
+                                      canvas.height = 16;
+                                      const ctx = canvas.getContext('2d');
+                                      d.canvas.forEach((row, y) => {
+                                        row.forEach((color, x) => {
+                                          ctx.fillStyle = color;
+                                          ctx.fillRect(x, y, 1, 1);
+                                        });
+                                      });
+                                      return canvas.toDataURL();
+                                    })()})`,
+                                    backgroundSize: 'cover'
+                                  }} />
+                                  <span className="font-bold">{d.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Terraform */}
+                  {menu === 'terraform' && (
+                    <div>
+                      <h3 className="text-xl font-bold mb-4">🏗️ Island Designer</h3>
+                      {!hasIslandDesigner ? (
+                        <div className="text-center p-8">
+                          <p className="mb-4">Purchase the Island Designer app to terraform your island!</p>
+                          <p className="text-2xl font-bold mb-4">Cost: 6,000 Bells</p>
+                          <button onClick={() => { if (bells >= 6000) { setBells(b => b - 6000); setHasIslandDesigner(true); notify('Got Island Designer!'); } else notify('Not enough Bells!'); }} 
+                                  className="bg-green-600 text-white px-8 py-3 rounded-lg text-lg">Purchase</button>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                          <button onClick={() => { setTerraformMode('cliff'); setMenu(null); }} className="bg-amber-600 text-white p-4 rounded-lg text-lg">
+                            ⛰️ Build Cliff
+                          </button>
+                          <button onClick={() => { setTerraformMode('water'); setMenu(null); }} className="bg-blue-600 text-white p-4 rounded-lg text-lg">
+                            💧 Create Water
+                          </button>
+                          <button onClick={() => { setTerraformMode('path'); setMenu(null); }} className="bg-gray-600 text-white p-4 rounded-lg text-lg">
+                            🛤️ Place Path
+                          </button>
+                          <button onClick={() => { setTerraformMode('remove'); setMenu(null); }} className="bg-red-600 text-white p-4 rounded-lg text-lg">
+                            ❌ Remove
+                          </button>
+                          <button onClick={() => setTerraformMode(null)} className="col-span-2 bg-gray-400 text-white p-4 rounded-lg text-lg">
+                            Exit Terraform Mode
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<Game />, document.getElementById('root'));
+  </script>
+</body>
+</html>
